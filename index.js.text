@@ -1,0 +1,417 @@
+// module our solution
+(function () {
+
+  const constants = {
+    ELEMENTS_COLOR: {
+      BODY: '#9C949E',
+      H1: '#FF3333',
+      H2: '#FF6633',
+      P: '#FF9933',
+      DIV: '#FFCC33',
+      UL: '#FFFF33',
+      LI: '#CCFF33',
+      INSPECTOR_BACKGROUND: '#FFFFFF'
+    },
+    STYLE_CLASS: {
+      BOX: ({type, hasChildren}) => {
+        return `background-color:${utils.getColor(type)};
+                ${hasChildren ? '' : 'height:25px; min-width:25px;'}
+                display:flex; 
+                flex-direction:column;
+                border:1px solid black;
+                padding: 5px;
+                margin: 5px;`;
+      },
+      BOX_TITLE: ({hasChildren}) => {
+        return `margin:${hasChildren ? '1px' : 'auto'};`;
+      },
+      BOX_CHILDREN: () => {
+        return 'display:flex';
+      },
+      DOM_BACKGROUND: ({bright, type}) => {
+        return type === 'mouseover' ? `hsl(155,100%,${bright}%)` : '';
+      },
+      ROOT_ELEMENT: () => {
+        return `position: fixed;
+                bottom: 0;
+                right: 0;
+                left: 0;
+                height: 250px;
+                border:5px double black;
+                background-color:${constants.ELEMENTS_COLOR.INSPECTOR_BACKGROUND};`;
+      }
+    },
+    DRAG_POSITION: {
+      INSIDE: 'INSIDE',
+      LEFT: 'LEFT',
+      RIGHT: 'RIGHT',
+      EMPTY: null
+    }
+  };
+
+  const utils = {
+      /**
+       * Create HTML element
+       * @param type
+       * @param constantClass
+       * @param extraAttributesArray
+       * @returns {Element}
+       */
+      createElement: ({type = 'div', constantClass, extraAttributesArray = [], innerText}) => {
+        const el = document.createElement(type);
+        constantClass && el.setAttribute('style', constantClass);
+
+        extraAttributesArray.length > 0 && extraAttributesArray.forEach(attr => {
+          if (attr.type && attr.value) {
+            el.setAttribute(attr.type, attr.value)
+          }
+        });
+
+        if (innerText) {
+          el.innerText = innerText;
+        }
+
+        return el;
+      },
+
+      /**
+       * Get Color by type,
+       * If no color found then create dynamic color base on the type sum of charCode
+       * @param type
+       * @returns {*}
+       */
+      getColor: (type) => {
+        if (!constants.ELEMENTS_COLOR[type]) {
+          let H = type.split('').reduce((acc, v) => acc + v.charCodeAt(0), 0);
+          constants.ELEMENTS_COLOR[type] = `hsl(${H}, 100%, 50%)`;
+        }
+        return constants.ELEMENTS_COLOR[type];
+      }
+    }
+  ;
+
+  // Drag & Drop data.
+  let lastDraggableInspectorElementPosition = constants.DRAG_POSITION.EMPTY;
+  let lastDraggableInspectorElement = null;
+
+  /**
+   * InspectorElement scan the DOM recursively and represent it on the Inspector.
+   */
+  class InspectorElement {
+    constructor({pointerToDomEl, parent, key, isRoot}) {
+      this.pointerToDomEl = pointerToDomEl; // page DOM pointer
+      this.parent = parent; // InspectorElement's parent
+      this.children = []; // InspectorElement's children
+      this.key = key; // InspectorElement identifier
+      this.isRoot = isRoot; // is top element flag
+
+      this.handleHoverEffect = this.handleHoverEffect.bind(this);
+      this.handleDragStart = this.handleDragStart.bind(this);
+      this.handleDragEnd = this.handleDragEnd.bind(this);
+      this.handleDragOver = this.handleDragOver.bind(this);
+      this.handleDragExit = this.handleDragExit.bind(this);
+      this.handleDrop = this.handleDrop.bind(this);
+
+      this.inspectorEl = this.updateChildren() //start recursive operation of mapping the DOM
+        .boxLayout(); // create inspector element layout base of the DOM el and its children.
+    }
+
+    /**
+     * Build the Box-el layout && add the events
+     * @returns {Element}
+     */
+    boxLayout() {
+      const type = this.pointerToDomEl.nodeName;
+      const hasChildren = this.children.length > 0;
+      const elContainer = utils.createElement({
+        type: 'div',
+        constantClass: constants.STYLE_CLASS.BOX({type, hasChildren}),
+        extraAttributesArray: [{type: 'draggable', value: 'true'}]
+      });
+
+      this.boxTitleLayout({elContainer, hasChildren, type})
+        .boxChildrenLayout({elContainer});
+
+      /**
+       * Drag & Drop events
+       */
+      if (!this.isRoot) {
+        elContainer.ondragstart = this.handleDragStart;
+        elContainer.ondragend = this.handleDragEnd;
+        elContainer.ondragover = this.handleDragOver;
+        elContainer.ondragleave = this.handleDragExit;
+        elContainer.ondrop = this.handleDrop;
+      }
+
+      return elContainer;
+    }
+
+    /**
+     * Build the Box-el title and add it to the Box-el
+     * @param elContainer
+     * @param hasChildren
+     * @param type
+     * @returns {InspectorElement}
+     */
+    boxTitleLayout({elContainer, hasChildren, type}) {
+      const elTitle = utils.createElement({
+        type: 'h3',
+        constantClass: constants.STYLE_CLASS.BOX_TITLE({hasChildren}),
+        innerText: type
+      });
+
+      /**
+       * DOM background color event
+       */
+      if (!this.isRoot) {
+        elTitle.onmouseout = this.handleHoverEffect;
+        elTitle.onmouseover = this.handleHoverEffect;
+      }
+
+      elContainer.appendChild(elTitle);
+
+      return this;
+    }
+
+    /**
+     * Build the Box-el children and add it them the Box-el
+     * @param elContainer
+     * @returns {InspectorElement}
+     */
+    boxChildrenLayout({elContainer}) {
+      const elChildren = utils.createElement({
+        type: 'div',
+        constantClass: constants.STYLE_CLASS.BOX_CHILDREN()
+      });
+
+      this.children.forEach(child => {
+        elChildren.appendChild(child.inspectorEl);
+      });
+      elContainer.appendChild(elChildren);
+      return this;
+    }
+
+    /**
+     * Recursive operation of mapping the DOM from parent drill down to all his children by the children order
+     * @returns {InspectorElement}
+     */
+    updateChildren() {
+      const children = this.pointerToDomEl.children;
+      if (children.length > 0) {
+        for (let i = 0; i < children.length; i++) {
+          this.children.push(new InspectorElement({
+            pointerToDomEl: children[i],
+            parent: this,
+            key: `${this.key}${i}`,
+            isRoot: false
+          }));
+        }
+      }
+
+      return this;
+    }
+
+    /**
+     * bubble the DOM background effect up in the DOM tree
+     * @param bright
+     * @param type
+     * @returns {InspectorElement}
+     */
+    bubbleHoverEffect({bright, type}) {
+      bright = bright - 5;
+      this.pointerToDomEl.style['background-color'] = constants.STYLE_CLASS.DOM_BACKGROUND({bright, type});
+      if (this.parent && !this.isRoot) {
+        this.parent.bubbleHoverEffect({bright, type});
+      }
+      return this;
+    }
+
+    /**
+     * Move DOM element & update the inspector tool on the new DOM structure.
+     * @param from
+     * @param el
+     */
+    moveElements({from, el, to}) {
+      // remove el from his parent children list
+      from.children = from.children.filter(child => child.key !== el.key);
+      // remove el from the old Inspector parent
+      el.pointerToDomEl.remove();
+      // re-render the old Inspector parent sub-tree
+      this.updateInspector({parent: from});
+
+      let newChildrenList = [];
+      switch (lastDraggableInspectorElementPosition) {
+        /**
+         * Add the element inside of the target
+         */
+        case constants.DRAG_POSITION.INSIDE:
+          to.pointerToDomEl.appendChild(el.pointerToDomEl);
+          to.children.push(el);
+          break;
+        /**
+         * Add the element to the left of the target
+         */
+        case constants.DRAG_POSITION.LEFT:
+          to.children.forEach(child => {
+            if (child.key === this.key) {
+              newChildrenList.push(el);
+              to.pointerToDomEl.insertBefore(el.pointerToDomEl, child.pointerToDomEl);
+            }
+            newChildrenList.push(child);
+          });
+          to.children = newChildrenList;
+          break;
+        /**
+         * Add the element to the right of the target
+         */
+        case constants.DRAG_POSITION.RIGHT:
+          to.children.forEach(child => {
+            newChildrenList.push(child);
+            if (child.key === this.key) {
+              newChildrenList.push(el);
+              to.pointerToDomEl.insertBefore(el.pointerToDomEl, child.pointerToDomEl.nextSibling);
+            }
+          });
+          to.children = newChildrenList;
+          break;
+      }
+      // re-render the new Inspector parent sub-tree
+      this.updateInspector({parent: to});
+    }
+
+    /**
+     * Update the Inspector UI,
+     * re-render the parent sub-tree
+     * @param parent
+     */
+    updateInspector({parent}) {
+      const parentDomElement = parent.inspectorEl.parentElement;
+
+      const tempEl = parent.boxLayout();
+      parentDomElement.replaceChild(tempEl, parent.inspectorEl);
+      parent.inspectorEl = tempEl;
+    }
+
+    /**
+     * Recursive operation of checking if lastDraggableInspectorElement is not parent of the target
+     * @returns {*}
+     */
+    isAllowed() {
+      if (this.isRoot) {
+        return true; // stop condition, arrived to the root without encountering the draggable element
+      }
+      if (this.key === lastDraggableInspectorElement.key || !lastDraggableInspectorElement) {
+        return false; // the draggable element is parent of the target
+      }
+
+      return this.parent.isAllowed();
+    }
+
+    /**
+     * DOM background effect (start position)
+     * @param ev
+     * @returns {InspectorElement}
+     */
+    handleHoverEffect(ev) {
+      ev.preventDefault();
+      !this.isRoot && this.bubbleHoverEffect({'bright': 50, type: ev.type});
+      return this;
+    }
+
+    // ***********************************************
+    // DRAG & DROP EVENTS
+    // ***********************************************
+
+    handleDragStart(ev) {
+      ev.target.style.opacity = '0.25';
+      lastDraggableInspectorElement = this;
+      ev.stopPropagation();
+    }
+
+    handleDragEnd(ev) {
+      ev.target.style.opacity = '1';
+      lastDraggableInspectorElement = null;
+      lastDraggableInspectorElementPosition = constants.DRAG_POSITION.EMPTY;
+      ev.stopPropagation();
+    }
+
+    handleDragOver(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      const rect = this.inspectorEl.getBoundingClientRect();
+      const dragX = ev.clientX + ev.offsetX;
+
+      switch (true) {
+        // right
+        case dragX > rect.right:
+          ev.currentTarget.style['border-right'] = '5px solid black';
+          ev.currentTarget.style['padding-right'] = '1px';
+          lastDraggableInspectorElementPosition = constants.DRAG_POSITION.RIGHT;
+          break;
+        // left
+        case dragX < rect.left :
+          ev.currentTarget.style['border-left'] = '5px solid black';
+          ev.currentTarget.style['padding-left'] = '1px';
+          lastDraggableInspectorElementPosition = constants.DRAG_POSITION.LEFT;
+          break;
+        // inside
+        default:
+          ev.currentTarget.style.border = '5px solid black';
+          ev.currentTarget.style.padding = '1px';
+          lastDraggableInspectorElementPosition = constants.DRAG_POSITION.INSIDE;
+          break;
+      }
+    }
+
+    handleDragExit(ev) {
+      ev.currentTarget.style.border = '1px solid black';
+      ev.currentTarget.style.padding = '5px';
+    }
+
+    handleDrop(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      ev.target.style.opacity = '1';
+      ev.currentTarget.style.border = '1px solid black';
+      ev.currentTarget.style.padding = '5px';
+
+      if (!this.isAllowed()) {
+        return;
+      }
+
+      this.moveElements({
+        from: lastDraggableInspectorElement.parent,
+        el: lastDraggableInspectorElement,
+        to: (lastDraggableInspectorElementPosition === constants.DRAG_POSITION.INSIDE) ? this : this.parent
+      });
+    }
+  }
+
+  /**
+   * Initialize the inspector tree.
+   */
+  const buildBottomInspector = () => {
+    const containerEl = utils.createElement({type: 'div', constantClass: constants.STYLE_CLASS.ROOT_ELEMENT()});
+
+    const body = document.getElementsByTagName('body')[0];
+    const root = new InspectorElement({pointerToDomEl: body, parent: containerEl, key: 0, isRoot: true});
+    containerEl.appendChild(root.inspectorEl);
+
+    document.body.appendChild(containerEl);
+
+    document.body.style['padding-bottom'] = '250px';
+
+  };
+
+  document.onreadystatechange = () => {
+    if (document.readyState === 'complete') {
+      buildBottomInspector();
+    }
+  };
+
+})();
+
+
+
